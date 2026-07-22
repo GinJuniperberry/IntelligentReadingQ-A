@@ -1,0 +1,8 @@
+streamlit
+requests
+pymupdf
+dashscope
+langchain-core
+langchain-community
+langchain-chroma
+langchain-text-splitters
