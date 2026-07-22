@@ -1,6 +1,6 @@
 # PDF 智能阅读问答 Demo
 
-这是一个基于 PDF 的 RAG 问答演示项目。系统会先读取 PDF、切分文本、调用 DashScope Embedding 构建 Chroma 向量库，再通过检索、重排和通义千问生成答案。
+这是一个基于 PDF 的 RAG 问答演示项目。系统会先读取 PDF、切分文本、调用 DashScope Embedding 构建 Chroma 向量库，再通过检索、重排和通义千问生成答案。对于没有文本层的扫描件或图片型 PDF，系统会自动执行中英文 OCR。
 
 ## 本地启动
 

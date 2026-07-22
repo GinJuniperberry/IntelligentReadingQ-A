@@ -8,7 +8,9 @@ import logging
 import re
 from urllib.parse import urlparse
 
-from langchain_community.document_loaders import PyMuPDFLoader
+import fitz
+import numpy as np
+import requests
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
@@ -20,10 +22,10 @@ class PdfIngestor:
     """PDF文档加载与切分器"""
 
     QUESTION_START = re.compile(
-        r"^(?:\d+\s*[.、)）]|[一二三四五六七八九十]+\s*[.、)）]|(?:问题|问)\s*[:：])"
+        r"^(?:\d+\s*[.．、)）]|[一二三四五六七八九十]+\s*[.．、)）]|(?:问题|问)\s*[:：])"
     )
     BLOCK_START = re.compile(
-        r"^(?:\d+\s*[.、)）]|[一二三四五六七八九十]+\s*[.、)）]|(?:问题|问|答案|答)\s*[:：])"
+        r"^(?:\d+\s*[.．、)）]|[一二三四五六七八九十]+\s*[.．、)）]|(?:问题|问|答案|答)\s*[:：])"
     )
     ANSWER_START = re.compile(r"^(?:答案|答)\s*[:：]")
     CJK_END = re.compile(r"[\u3400-\u9fff]$")
@@ -33,7 +35,7 @@ class PdfIngestor:
 
     # 优先在下一道题之前切分，避免把问题和答案拆到两个 chunk。
     SEPARATORS = [
-        r"\n(?=\s*(?:\d+\s*[.、)）]|[一二三四五六七八九十]+\s*[.、)）]|(?:问题|问)\s*[:：]))",
+        r"\n(?=\s*(?:\d+\s*[.．、)）]|[一二三四五六七八九十]+\s*[.．、)）]|(?:问题|问)\s*[:：]))",
         "\n\n",
         "\n",
         r"(?<=[。！？!?；;])",
@@ -55,6 +57,71 @@ class PdfIngestor:
             is_separator_regex=True,
             separators=self.SEPARATORS,
         )
+        self._ocr_engine = None
+
+    def _get_ocr_engine(self):
+        if self._ocr_engine is None:
+            try:
+                from rapidocr_onnxruntime import RapidOCR
+            except ImportError as exc:
+                raise RuntimeError(
+                    "检测到图片型 PDF，但 OCR 依赖未安装，请安装 rapidocr_onnxruntime"
+                ) from exc
+            self._ocr_engine = RapidOCR()
+        return self._ocr_engine
+
+    def _ocr_page(self, page: fitz.Page) -> str:
+        scale = self._config.ocr_dpi / 72
+        pixmap = page.get_pixmap(
+            matrix=fitz.Matrix(scale, scale),
+            colorspace=fitz.csRGB,
+            alpha=False,
+        )
+        image = np.frombuffer(pixmap.samples, dtype=np.uint8).reshape(
+            pixmap.height,
+            pixmap.width,
+            pixmap.n,
+        )
+        result, _ = self._get_ocr_engine()(image)
+        if not result:
+            return ""
+
+        return "\n".join(
+            item[1].strip()
+            for item in result
+            if item[1].strip() and float(item[2]) >= self._config.ocr_min_confidence
+        )
+
+    def _load_pdf_documents(self, pdf, source: str) -> List[Document]:
+        documents = []
+        total_pages = pdf.page_count
+
+        for page_number, page in enumerate(pdf):
+            text = page.get_text("text", sort=True).strip()
+            extraction_method = "text"
+            if not text:
+                logger.info(f"第 {page_number + 1} 页没有可提取文本，开始 OCR")
+                text = self._ocr_page(page).strip()
+                extraction_method = "ocr"
+
+            if not text:
+                logger.warning(f"第 {page_number + 1} 页经 OCR 后仍未识别到文本")
+                continue
+
+            documents.append(
+                Document(
+                    page_content=text,
+                    metadata={
+                        "source": source,
+                        "file_path": source,
+                        "page": page_number,
+                        "total_pages": total_pages,
+                        "extraction_method": extraction_method,
+                    },
+                )
+            )
+
+        return documents
 
     @classmethod
     def _normalize_text(cls, text: str) -> str:
@@ -155,9 +222,10 @@ class PdfIngestor:
         :return: 切分后的Document列表
         """
         try:
-            # PyMuPDFLoader 直接支持 URL
-            loader = PyMuPDFLoader(url)
-            documents = loader.load()
+            response = requests.get(url, timeout=30)
+            response.raise_for_status()
+            with fitz.open(stream=response.content, filetype="pdf") as pdf:
+                documents = self._load_pdf_documents(pdf, url)
             return self._split_documents(documents)
         except Exception as e:
             raise RuntimeError(f"从URL加载PDF失败 ({url}): {e}")
@@ -188,8 +256,8 @@ class PdfIngestor:
             raise ValueError(f"路径不是文件: {file_path}")
 
         try:
-            loader = PyMuPDFLoader(str(path))
-            documents = loader.load()
+            with fitz.open(str(path)) as pdf:
+                documents = self._load_pdf_documents(pdf, str(path))
             return self._split_documents(documents)
         except Exception as e:
             raise RuntimeError(f"PDF加载失败 ({file_path}): {e}")

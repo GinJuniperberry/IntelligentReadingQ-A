@@ -10,14 +10,14 @@ from querying.rerank import RerankPipeline
 class PdfIngestRegressionTest(unittest.TestCase):
     def test_short_question_and_answer_are_kept_together(self):
         document = Document(
-            page_content="1. 世界上最美的女人是谁？\n答：世界上最美的女\n人是范冰冰。",
+            page_content="1．世界上最美的女人是谁？\n答：世界上最美的女\n人是范冰冰。",
             metadata={"page": 0},
         )
 
         chunks = PdfIngestor(QaConfig())._split_documents([document])
 
         self.assertEqual(len(chunks), 1)
-        self.assertIn("1. 世界上最美的女人是谁？", chunks[0].page_content)
+        self.assertIn("1．世界上最美的女人是谁？", chunks[0].page_content)
         self.assertIn("答：世界上最美的女人是范冰冰。", chunks[0].page_content)
 
     def test_short_retrieved_chunk_is_not_filtered_out(self):

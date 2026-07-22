@@ -13,7 +13,11 @@ class QaConfig:
     # 文本切分配置
     chunk_size: int = 500
     chunk_overlap: int = 80
-    index_version: str = "v2"
+    index_version: str = "v3"
+
+    # 图片型 PDF OCR 配置
+    ocr_dpi: int = 144
+    ocr_min_confidence: float = 0.45
 
     # 向量库配置
     chroma_root_dir: str = "./chroma_db"

@@ -1,6 +1,7 @@
 streamlit
 requests
 pymupdf
+rapidocr_onnxruntime
 dashscope
 langchain-core
 langchain-community
