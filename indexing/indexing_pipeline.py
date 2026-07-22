@@ -42,8 +42,9 @@ class IndexingPipeline:
             raise ValueError("DashScope API Key不能为空")
 
         # 1. 计算文件哈希
-        file_hash = self._compute_hash(pdf_source)
-        logger.info(f"PDF文件哈希: {file_hash}")
+        content_hash = self._compute_hash(pdf_source)
+        file_hash = f"{content_hash}_{self._config.index_version}"
+        logger.info(f"PDF索引标识: {file_hash}")
 
         # 2. 加载并切分文档
         chunks = self._ingestor.ingest(pdf_source)

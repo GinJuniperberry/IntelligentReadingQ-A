@@ -11,8 +11,9 @@ from typing import Optional
 class QaConfig:
     """QA系统配置"""
     # 文本切分配置
-    chunk_size: int = 200
-    chunk_overlap: int = 20
+    chunk_size: int = 500
+    chunk_overlap: int = 80
+    index_version: str = "v2"
 
     # 向量库配置
     chroma_root_dir: str = "./chroma_db"

@@ -5,6 +5,7 @@ PDF文档加载与切分模块
 from pathlib import Path
 from typing import List
 import logging
+import re
 from urllib.parse import urlparse
 
 from langchain_community.document_loaders import PyMuPDFLoader
@@ -18,9 +19,27 @@ logger = logging.getLogger(__name__)
 class PdfIngestor:
     """PDF文档加载与切分器"""
 
-    # 中文文本分隔符
+    QUESTION_START = re.compile(
+        r"^(?:\d+\s*[.、)）]|[一二三四五六七八九十]+\s*[.、)）]|(?:问题|问)\s*[:：])"
+    )
+    BLOCK_START = re.compile(
+        r"^(?:\d+\s*[.、)）]|[一二三四五六七八九十]+\s*[.、)）]|(?:问题|问|答案|答)\s*[:：])"
+    )
+    ANSWER_START = re.compile(r"^(?:答案|答)\s*[:：]")
+    CJK_END = re.compile(r"[\u3400-\u9fff]$")
+    CJK_START = re.compile(r"^[\u3400-\u9fff]")
+    NO_SPACE_END = re.compile(r"[\u3400-\u9fff，。；：！？、）】》]$")
+    SENTENCE_END = ("。", "！", "？", "!", "?", "；", ";")
+
+    # 优先在下一道题之前切分，避免把问题和答案拆到两个 chunk。
     SEPARATORS = [
-        "\n", "(?<=。)", "(?<=！)", "(?<=？)", "(?<=；)", "(?<=，)", " ", ""
+        r"\n(?=\s*(?:\d+\s*[.、)）]|[一二三四五六七八九十]+\s*[.、)）]|(?:问题|问)\s*[:：]))",
+        "\n\n",
+        "\n",
+        r"(?<=[。！？!?；;])",
+        r"(?<=[，,])",
+        " ",
+        "",
     ]
 
     def __init__(self, config: QaConfig) -> None:
@@ -37,6 +56,63 @@ class PdfIngestor:
             separators=self.SEPARATORS,
         )
 
+    @classmethod
+    def _normalize_text(cls, text: str) -> str:
+        """Remove PDF visual line wraps while preserving semantic block boundaries."""
+        lines = []
+        for raw_line in text.replace("\u00ad", "").splitlines():
+            line = re.sub(r"[\t \u3000]+", " ", raw_line).strip()
+            if line:
+                lines.append(line)
+
+        normalized: List[str] = []
+        for line in lines:
+            if not normalized:
+                normalized.append(line)
+                continue
+
+            previous = normalized[-1]
+            if cls.BLOCK_START.match(line) or previous.endswith(cls.SENTENCE_END):
+                normalized.append(line)
+                continue
+
+            separator = ""
+            if not (cls.NO_SPACE_END.search(previous) and cls.CJK_START.search(line)):
+                separator = " "
+            normalized[-1] = f"{previous}{separator}{line}"
+
+        return "\n".join(normalized)
+
+    @classmethod
+    def _normalize_documents(cls, documents: List[Document]) -> List[Document]:
+        normalized_documents: List[Document] = []
+
+        for document in documents:
+            if not document.page_content or not document.page_content.strip():
+                continue
+
+            text = cls._normalize_text(document.page_content)
+            lines = text.splitlines()
+
+            # PDF loaders return one Document per page. Join an answer at the
+            # start of a new page back to the question at the previous page end.
+            if normalized_documents and lines and cls.ANSWER_START.match(lines[0]):
+                previous = normalized_documents[-1]
+                previous_last_line = previous.page_content.rsplit("\n", 1)[-1]
+                if cls.QUESTION_START.match(previous_last_line):
+                    previous.page_content = f"{previous.page_content}\n{lines.pop(0)}"
+                    previous.metadata["page_end"] = (document.metadata or {}).get("page")
+
+            if lines:
+                normalized_documents.append(
+                    Document(
+                        page_content="\n".join(lines),
+                        metadata=dict(document.metadata or {}),
+                    )
+                )
+
+        return normalized_documents
+
     def _split_documents(self, documents: List[Document]) -> List[Document]:
         """
         切分文档为文本块
@@ -48,7 +124,8 @@ class PdfIngestor:
             return []
 
         try:
-            chunks = self._splitter.split_documents(documents)
+            normalized_documents = self._normalize_documents(documents)
+            chunks = self._splitter.split_documents(normalized_documents)
             logger.debug(f"文档切分完成: {len(documents)} 页 → {len(chunks)} 个文本块")
             return chunks
         except Exception as e:

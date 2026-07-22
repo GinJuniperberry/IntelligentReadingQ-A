@@ -51,10 +51,20 @@ class RerankPipeline:
         vec_scores: List[float],
         final_top_n: int = 4,
     ) -> Tuple[List[RetrievedEvidence], str]:
-        pre_docs = self.__filter(recalled_docs)
+        pre_docs = self._filter_documents(recalled_docs)
         score_map = {doc.page_content: score for doc, score in zip(recalled_docs, vec_scores)}
 
         final_docs, llm_scores = self.__llm_rerank_batch(query, pre_docs, top_n=final_top_n)
+        if not final_docs:
+            fallback = [
+                (score, doc)
+                for doc, score in zip(recalled_docs, vec_scores)
+                if doc in pre_docs
+            ]
+            fallback.sort(key=lambda item: item[0], reverse=True)
+            selected = fallback[:final_top_n]
+            final_docs = [doc for _, doc in selected]
+            llm_scores = [round(max(0.0, min(1.0, score)) * 10, 1) for score, _ in selected]
 
         evidence_list = []
         for index, doc in enumerate(final_docs):
@@ -80,10 +90,10 @@ class RerankPipeline:
 
         return evidence_list, "\n\n".join(context_lines)
 
-    def __filter(
-        self,
+    @staticmethod
+    def _filter_documents(
         docs: List[Document],
-        min_len: int = 40,
+        min_len: int = 1,
         max_len: int = 2000,
     ) -> List[Document]:
         filtered = []
