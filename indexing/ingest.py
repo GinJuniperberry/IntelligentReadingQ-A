@@ -65,7 +65,8 @@ class PdfIngestor:
                 from rapidocr_onnxruntime import RapidOCR
             except ImportError as exc:
                 raise RuntimeError(
-                    "检测到图片型 PDF，但 OCR 依赖未安装，请安装 rapidocr_onnxruntime"
+                    "检测到图片型 PDF，但 OCR 组件加载失败。"
+                    f"原始错误：{exc}"
                 ) from exc
             self._ocr_engine = RapidOCR()
         return self._ocr_engine
